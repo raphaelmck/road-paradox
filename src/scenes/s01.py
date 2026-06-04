@@ -12,8 +12,8 @@ ROUTE_COLOR    = "#666666"
 SHORTCUT_COLOR = "#FFD700"
 ARC_ANGLE      = PI * 0.62
 
-# route labels: right-align both at this x so the trailing "d" of "road" lines up
-LABEL_RIGHT_X = 6.2
+# route labels: right-aligned on the left side, trailing "d" of "road" shared
+LABEL_RIGHT_X = -4.6
 
 CAR_PALETTE = [
     "#58C4DD", "#3DB8D0", "#72D4E8",
@@ -35,8 +35,10 @@ class ObviousSolution(Scene):
         self._phase_labels_settle()
         self._phase_upper()
         self._phase_lower()
+        self._phase_idle_with_dots()   # long pause with dots + full network visible
         self._phase_shortcut()
         self._phase_question()
+        self._phase_final_idle()       # long closing pause, then save dot state
 
     # ── helpers ──────────────────────────────────────────────────────────────
 
@@ -52,13 +54,12 @@ class ObviousSolution(Scene):
         outer = Circle(radius=0.22, stroke_width=2.5, stroke_color=WHITE, fill_opacity=0)
         inner = Dot(pos, radius=0.10, color=WHITE)
         outer.move_to(pos)
-        # label starts white and centered below the dot
         label = Tex(name, font_size=26, color=WHITE)
         label.next_to(outer, DOWN, buff=0.28)
         return VGroup(outer, inner), label
 
     def _route_label(self, text: str, y_pos: float):
-        """Right-align label to LABEL_RIGHT_X so both trailing 'd's share an x."""
+        """Right-aligned to LABEL_RIGHT_X; both trailing 'd's share the same x."""
         lbl = Tex(text, font_size=20, color=DIM)
         lbl.align_to(np.array([LABEL_RIGHT_X, 0, 0]), RIGHT)
         lbl.set_y(y_pos)
@@ -67,7 +68,7 @@ class ObviousSolution(Scene):
     # ── phases ───────────────────────────────────────────────────────────────
 
     def _phase_nodes(self):
-        self.home_node, self.home_lbl  = self._node("HOME",     HOME)
+        self.home_node,  self.home_lbl  = self._node("HOME",     HOME)
         self.dtown_node, self.dtown_lbl = self._node("DOWNTOWN", DOWNTOWN)
         self.play(
             FadeIn(self.home_node,  scale=1.3), Write(self.home_lbl),
@@ -78,13 +79,13 @@ class ObviousSolution(Scene):
 
     def _phase_cars(self):
         n = 38
-        offsets = _RNG.uniform(low=[-0.42, -0.32, 0], high=[0.42, 0.32, 0], size=(n, 3))
+        offsets  = _RNG.uniform(low=[-0.42, -0.32, 0], high=[0.42, 0.32, 0], size=(n, 3))
         offsets[:, 2] = 0
         colors   = [CAR_PALETTE[i % len(CAR_PALETTE)] for i in range(n)]
-        freqs_x  = _RNG.uniform(0.25, 0.7,  n)
-        freqs_y  = _RNG.uniform(0.25, 0.7,  n)
-        phases_x = _RNG.uniform(0,    TAU,  n)
-        phases_y = _RNG.uniform(0,    TAU,  n)
+        freqs_x  = _RNG.uniform(0.25, 0.7, n)
+        freqs_y  = _RNG.uniform(0.25, 0.7, n)
+        phases_x = _RNG.uniform(0,    TAU, n)
+        phases_y = _RNG.uniform(0,    TAU, n)
         amp = 0.035
 
         self._timer = ValueTracker(0)
@@ -113,7 +114,7 @@ class ObviousSolution(Scene):
         self.wait(1.0)
 
     def _phase_labels_settle(self):
-        """Animate node labels from white/centered to grey/edge-aligned."""
+        """Slide node labels from white/centered to grey/outward."""
         self.play(
             self.home_lbl.animate.set_color(DIM).shift(DOWN * 0.30 + LEFT * 0.55),
             self.dtown_lbl.animate.set_color(DIM).shift(DOWN * 0.30 + RIGHT * 0.55),
@@ -125,9 +126,9 @@ class ObviousSolution(Scene):
         self.upper = ArcBetweenPoints(HOME, DOWNTOWN, angle=ARC_ANGLE)
         self.upper.set_stroke(color=ROUTE_COLOR, width=3)
 
-        # anchor y to arc at t=0.82 (right portion) then step outside the curve
-        top_y = self.upper.point_from_proportion(0.82)[1] + 0.44
-        lbl   = self._route_label("top road", top_y)
+        # just above arc peak → label clears the arc everywhere
+        top_y = self.upper.point_from_proportion(0.5)[1] + 0.36
+        lbl = self._route_label("top road", top_y)
 
         self.play(Create(self.upper), run_time=1.1)
         self.play(FadeIn(lbl), run_time=0.5)
@@ -137,12 +138,16 @@ class ObviousSolution(Scene):
         self.lower = ArcBetweenPoints(HOME, DOWNTOWN, angle=-ARC_ANGLE)
         self.lower.set_stroke(color=ROUTE_COLOR, width=3)
 
-        bot_y = self.lower.point_from_proportion(0.82)[1] - 0.44
-        lbl   = self._route_label("bottom road", bot_y)
+        bot_y = self.lower.point_from_proportion(0.5)[1] - 0.36
+        lbl = self._route_label("bottom road", bot_y)
 
         self.play(Create(self.lower), run_time=1.1)
         self.play(FadeIn(lbl), run_time=0.5)
-        self.wait(1.5)
+        self.wait(0.5)
+
+    def _phase_idle_with_dots(self):
+        """Hold on the full network with jittering dots before introducing the shortcut."""
+        self.wait(5.0)
 
     def _phase_shortcut(self):
         top_pt = self.upper.point_from_proportion(0.5)
@@ -176,4 +181,17 @@ class ObviousSolution(Scene):
         q = Tex(r"More roads $=$ less traffic?", font_size=40, color=WHITE)
         q.to_edge(DOWN, buff=0.65)
         self.play(Write(q), run_time=1.1)
-        self.wait(2.5)
+        self.wait(1.5)
+
+    def _phase_final_idle(self):
+        """Long closing hold, then freeze dots and persist positions for s02."""
+        self.wait(4.0)
+
+        # stop jitter so get_center() captures the final rendered position
+        for dot in self.cars:
+            dot.clear_updaters()
+        self._timer.clear_updaters()
+
+        positions = np.array([dot.get_center() for dot in self.cars])
+        os.makedirs("media", exist_ok=True)
+        np.save("media/s01_car_positions.npy", positions)
