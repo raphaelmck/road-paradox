@@ -2,7 +2,7 @@ import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 from manim import *
-from src.style import apply_style, BACKGROUND, DIM, FONT
+from src.style import apply_style, DIM
 import numpy as np
 
 HOME     = np.array([-4.8, 0, 0])
@@ -10,7 +10,10 @@ DOWNTOWN = np.array([ 4.8, 0, 0])
 
 ROUTE_COLOR    = "#666666"
 SHORTCUT_COLOR = "#FFD700"
-ARC_ANGLE      = PI * 0.62   # pronounced bow without leaving the frame
+ARC_ANGLE      = PI * 0.62
+
+# route labels: right-align both at this x so the trailing "d" of "road" lines up
+LABEL_RIGHT_X = 6.2
 
 CAR_PALETTE = [
     "#58C4DD", "#3DB8D0", "#72D4E8",
@@ -28,7 +31,8 @@ class ObviousSolution(Scene):
     def construct(self):
         self.add(self._grid())
         self._phase_nodes()
-        self._phase_cars()        # sets up jitter timer before routes draw
+        self._phase_cars()
+        self._phase_labels_settle()
         self._phase_upper()
         self._phase_lower()
         self._phase_shortcut()
@@ -44,49 +48,45 @@ class ObviousSolution(Scene):
             g.add(Line([-8, y, 0], [8, y, 0], stroke_width=0.7, stroke_color="#1B1B1B"))
         return g
 
-    def _node(self, name: str, pos, outward: np.ndarray):
+    def _node(self, name: str, pos):
         outer = Circle(radius=0.22, stroke_width=2.5, stroke_color=WHITE, fill_opacity=0)
         inner = Dot(pos, radius=0.10, color=WHITE)
         outer.move_to(pos)
-        label = Text(name, font=FONT, font_size=26, color=DIM)
-        label.next_to(outer, DOWN, buff=0.45)
-        label.shift(outward * 0.45)
+        # label starts white and centered below the dot
+        label = Tex(name, font_size=26, color=WHITE)
+        label.next_to(outer, DOWN, buff=0.28)
         return VGroup(outer, inner), label
 
-    def _route_label(self, text: str, arc: VMobject, v_dir: np.ndarray, t: float):
-        lbl = Text(text, font=FONT, font_size=20, color=DIM)
-        lbl.move_to(arc.point_from_proportion(t) + v_dir * 0.48)
+    def _route_label(self, text: str, y_pos: float):
+        """Right-align label to LABEL_RIGHT_X so both trailing 'd's share an x."""
+        lbl = Tex(text, font_size=20, color=DIM)
+        lbl.align_to(np.array([LABEL_RIGHT_X, 0, 0]), RIGHT)
+        lbl.set_y(y_pos)
         return lbl
 
     # ── phases ───────────────────────────────────────────────────────────────
 
     def _phase_nodes(self):
-        home,  home_lbl  = self._node("HOME",     HOME,     LEFT)
-        dtown, dtown_lbl = self._node("DOWNTOWN", DOWNTOWN, RIGHT)
+        self.home_node, self.home_lbl  = self._node("HOME",     HOME)
+        self.dtown_node, self.dtown_lbl = self._node("DOWNTOWN", DOWNTOWN)
         self.play(
-            FadeIn(home,  scale=1.3), Write(home_lbl),
-            FadeIn(dtown, scale=1.3), Write(dtown_lbl),
+            FadeIn(self.home_node,  scale=1.3), Write(self.home_lbl),
+            FadeIn(self.dtown_node, scale=1.3), Write(self.dtown_lbl),
             run_time=1.1,
         )
         self.wait(0.6)
 
     def _phase_cars(self):
         n = 38
-
-        # symmetric spread centered on HOME
         offsets = _RNG.uniform(low=[-0.42, -0.32, 0], high=[0.42, 0.32, 0], size=(n, 3))
         offsets[:, 2] = 0
-
-        colors = [CAR_PALETTE[i % len(CAR_PALETTE)] for i in range(n)]
-
-        # per-dot jitter parameters
-        freqs_x  = _RNG.uniform(0.25, 0.7, n)
-        freqs_y  = _RNG.uniform(0.25, 0.7, n)
-        phases_x = _RNG.uniform(0, TAU, n)
-        phases_y = _RNG.uniform(0, TAU, n)
+        colors   = [CAR_PALETTE[i % len(CAR_PALETTE)] for i in range(n)]
+        freqs_x  = _RNG.uniform(0.25, 0.7,  n)
+        freqs_y  = _RNG.uniform(0.25, 0.7,  n)
+        phases_x = _RNG.uniform(0,    TAU,  n)
+        phases_y = _RNG.uniform(0,    TAU,  n)
         amp = 0.035
 
-        # single timer drives all dots
         self._timer = ValueTracker(0)
         self._timer.add_updater(lambda m, dt: m.increment_value(dt))
         self.add(self._timer)
@@ -112,11 +112,22 @@ class ObviousSolution(Scene):
         self.play(FadeIn(self.cars, lag_ratio=0.03), run_time=1.0)
         self.wait(1.0)
 
+    def _phase_labels_settle(self):
+        """Animate node labels from white/centered to grey/edge-aligned."""
+        self.play(
+            self.home_lbl.animate.set_color(DIM).shift(DOWN * 0.30 + LEFT * 0.55),
+            self.dtown_lbl.animate.set_color(DIM).shift(DOWN * 0.30 + RIGHT * 0.55),
+            run_time=0.7,
+        )
+        self.wait(0.3)
+
     def _phase_upper(self):
         self.upper = ArcBetweenPoints(HOME, DOWNTOWN, angle=ARC_ANGLE)
         self.upper.set_stroke(color=ROUTE_COLOR, width=3)
-        # label on outer arc, pushed toward the DOWNTOWN end
-        lbl = self._route_label("top road", self.upper, UP, t=0.72)
+
+        # anchor y to arc at t=0.82 (right portion) then step outside the curve
+        top_y = self.upper.point_from_proportion(0.82)[1] + 0.44
+        lbl   = self._route_label("top road", top_y)
 
         self.play(Create(self.upper), run_time=1.1)
         self.play(FadeIn(lbl), run_time=0.5)
@@ -125,7 +136,9 @@ class ObviousSolution(Scene):
     def _phase_lower(self):
         self.lower = ArcBetweenPoints(HOME, DOWNTOWN, angle=-ARC_ANGLE)
         self.lower.set_stroke(color=ROUTE_COLOR, width=3)
-        lbl = self._route_label("bottom road", self.lower, DOWN, t=0.72)
+
+        bot_y = self.lower.point_from_proportion(0.82)[1] - 0.44
+        lbl   = self._route_label("bottom road", bot_y)
 
         self.play(Create(self.lower), run_time=1.1)
         self.play(FadeIn(lbl), run_time=0.5)
@@ -160,7 +173,7 @@ class ObviousSolution(Scene):
         self.wait(0.9)
 
     def _phase_question(self):
-        q = Text("More roads = less traffic?", font=FONT, font_size=40, color=WHITE)
+        q = Tex(r"More roads $=$ less traffic?", font_size=40, color=WHITE)
         q.to_edge(DOWN, buff=0.65)
         self.play(Write(q), run_time=1.1)
         self.wait(2.5)
