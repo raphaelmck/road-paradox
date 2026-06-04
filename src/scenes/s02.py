@@ -193,10 +193,10 @@ class RoadNetwork(Scene):
 
     def _phase_nodes(self):
         s_lbl = Tex("Start", font_size=26, color=DIM)
-        s_lbl.next_to(Circle(radius=NODE_R).move_to(START), LEFT, buff=0.3)
+        s_lbl.next_to(Circle(radius=NODE_R).move_to(START), LEFT, buff=0.60)
 
         e_lbl = Tex("End", font_size=26, color=DIM)
-        e_lbl.next_to(Circle(radius=NODE_R).move_to(END), RIGHT, buff=0.3)
+        e_lbl.next_to(Circle(radius=NODE_R).move_to(END), RIGHT, buff=0.60)
 
         a_node, a_lbl = self._node("A", A_POS, UP)
         b_node, b_lbl = self._node("B", B_POS, DOWN)
