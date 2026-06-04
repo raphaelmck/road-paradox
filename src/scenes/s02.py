@@ -5,7 +5,7 @@ from manim import *
 from src.style import apply_style, DIM, FONT
 import numpy as np
 
-# ── s01 constants (to reconstruct the end state) ──────────────────────────────
+# ── s01 constants (for seamless continuation) ─────────────────────────────────
 _HOME           = np.array([-4.8, 0, 0])
 _DOWNTOWN       = np.array([ 4.8, 0, 0])
 _ARC_ANGLE      = PI * 0.62
@@ -26,8 +26,6 @@ CAR_PALETTE = [
     "#A0E4F8", "#4EC8DC",
 ]
 
-_RNG = np.random.default_rng(7)
-
 
 class RoadNetwork(Scene):
     def setup(self):
@@ -38,7 +36,6 @@ class RoadNetwork(Scene):
         self._load_s01_state()
         self._phase_transition()
         self._phase_nodes()
-        self._phase_cars()
         self._phase_roads()
         self._phase_fixed_labels()
         self._phase_dynamic_labels()
@@ -74,14 +71,22 @@ class RoadNetwork(Scene):
 
     def _road_label(self, text, road, perp_offset):
         mid = road.point_from_proportion(0.5)
-        lbl = Text(text, font=FONT, font_size=19, color=DIM)
+        lbl = Tex(text, font_size=19, color=DIM)
         lbl.move_to(mid + perp_offset)
         return lbl
 
     # ── s01 end-state reconstruction ─────────────────────────────────────────
 
     def _load_s01_state(self):
-        """Add every element that was visible at the end of s01, with no animation."""
+        """Reconstruct s01's end state. Timer + jitter start on frame 1."""
+        # Trackers shared by all car updaters for the whole scene
+        self._timer   = ValueTracker(0)
+        self._x_shift = ValueTracker(0)
+        self._y_shift = ValueTracker(0)
+        self._timer.add_updater(lambda m, dt: m.increment_value(dt))
+        self.add(self._timer, self._x_shift, self._y_shift)
+
+        # ── nodes ─────────────────────────────────────────────────────────────
         home_outer = Circle(radius=0.22, stroke_width=2.5, stroke_color=WHITE, fill_opacity=0)
         home_outer.move_to(_HOME)
         home_inner = Dot(_HOME, radius=0.10, color=WHITE)
@@ -90,15 +95,16 @@ class RoadNetwork(Scene):
         dtown_outer.move_to(_DOWNTOWN)
         dtown_inner = Dot(_DOWNTOWN, radius=0.10, color=WHITE)
 
-        # Settled label positions from s01's _phase_labels_settle
-        home_lbl = Tex("HOME", font_size=26, color=DIM)
-        home_lbl.next_to(home_outer, DOWN, buff=0.28)
-        home_lbl.shift(DOWN * 0.30 + LEFT * 0.55)
+        # ── node labels — kept alive, morphed via ReplacementTransform ────────
+        self._s01_home_lbl = Tex("HOME", font_size=26, color=DIM)
+        self._s01_home_lbl.next_to(home_outer, DOWN, buff=0.28)
+        self._s01_home_lbl.shift(DOWN * 0.30 + LEFT * 0.55)
 
-        dtown_lbl = Tex("DOWNTOWN", font_size=26, color=DIM)
-        dtown_lbl.next_to(dtown_outer, DOWN, buff=0.28)
-        dtown_lbl.shift(DOWN * 0.30 + RIGHT * 0.55)
+        self._s01_dtown_lbl = Tex("DOWNTOWN", font_size=26, color=DIM)
+        self._s01_dtown_lbl.next_to(dtown_outer, DOWN, buff=0.28)
+        self._s01_dtown_lbl.shift(DOWN * 0.30 + RIGHT * 0.55)
 
+        # ── edges / shortcut / question — faded out in transition ─────────────
         upper = ArcBetweenPoints(_HOME, _DOWNTOWN, angle=_ARC_ANGLE)
         upper.set_stroke(color="#BBBBBB", width=4)
         lower = ArcBetweenPoints(_HOME, _DOWNTOWN, angle=-_ARC_ANGLE)
@@ -130,102 +136,96 @@ class RoadNetwork(Scene):
         q = Tex(r"More roads $=$ less traffic?", font_size=40, color=WHITE)
         q.to_edge(DOWN, buff=0.65)
 
-        _PAL = ["#58C4DD", "#3DB8D0", "#72D4E8", "#26A8C4",
-                "#89DCF0", "#1E9CB8", "#A0E4F8", "#4EC8DC"]
-        try:
-            positions = np.load("media/s01_car_positions.npy")
-        except FileNotFoundError:
-            positions = np.empty((0, 3))
-
-        self._s01_cars = VGroup(*[
-            Dot(positions[i], radius=0.065,
-                color=_PAL[i % len(_PAL)], fill_opacity=0.88)
-            for i in range(len(positions))
-        ])
-
-        self._s01_overlay = VGroup(
-            VGroup(home_outer, home_inner),
-            VGroup(dtown_outer, dtown_inner),
-            home_lbl, dtown_lbl,
+        self._s01_fading = VGroup(
             upper, lower, top_lbl, bot_lbl,
             glow, shortcut, q,
         )
-        self.add(self._s01_overlay, self._s01_cars)
+
+        # ── cars: identical style to s01, jittering from frame 1 ─────────────
+        try:
+            bases = np.load("media/s01_car_positions.npy")
+        except FileNotFoundError:
+            bases = np.empty((0, 3))
+
+        n   = len(bases)
+        amp = 0.035                        # matches s01 amplitude exactly
+        rng = np.random.default_rng(13)
+        fx  = rng.uniform(0.25, 0.70, max(n, 1))
+        fy  = rng.uniform(0.25, 0.70, max(n, 1))
+        px  = rng.uniform(0, TAU,  max(n, 1))
+        py  = rng.uniform(0, TAU,  max(n, 1))
+
+        def make_updater(b, fxi, fyi, pxi, pyi):
+            def u(d):
+                t  = self._timer.get_value()
+                dx = self._x_shift.get_value()
+                dy = self._y_shift.get_value()
+                d.move_to(b + np.array([
+                    amp * np.sin(TAU * fxi * t + pxi) + dx,
+                    amp * np.sin(TAU * fyi * t + pyi) + dy,
+                    0,
+                ]))
+            return u
+
+        self._s01_cars = VGroup()
+        for i in range(n):
+            dot = Dot(bases[i], radius=0.065,
+                      color=CAR_PALETTE[i % len(CAR_PALETTE)], fill_opacity=0.88)
+            dot.add_updater(make_updater(bases[i].copy(), fx[i], fy[i], px[i], py[i]))
+            self._s01_cars.add(dot)
+
+        self._s01_home_node  = VGroup(home_outer, home_inner)
+        self._s01_dtown_node = VGroup(dtown_outer, dtown_inner)
+
+        self.add(
+            self._s01_home_node, self._s01_dtown_node,
+            self._s01_home_lbl, self._s01_dtown_lbl,
+            self._s01_fading,
+            self._s01_cars,
+        )
 
     def _phase_transition(self):
-        self.play(
-            FadeOut(self._s01_overlay),
-            FadeOut(self._s01_cars),
-            run_time=0.8,
-        )
+        """Fade out old edges, shortcut, and edge labels only."""
+        self.play(FadeOut(self._s01_fading), run_time=0.8)
+        self.wait(0.3)
 
     # ── phases ───────────────────────────────────────────────────────────────
 
     def _phase_nodes(self):
-        s_node, s_lbl = self._node("Start", START, LEFT)
-        e_node, e_lbl = self._node("End",   END,   RIGHT)
-        a_node, a_lbl = self._node("A",     A_POS, UP)
-        b_node, b_lbl = self._node("B",     B_POS, DOWN)
+        s_lbl = Tex("Start", font_size=26, color=DIM)
+        s_lbl.next_to(Circle(radius=NODE_R).move_to(START), LEFT, buff=0.3)
 
-        self.s_node, self.s_lbl = s_node, s_lbl
-        self.e_node, self.e_lbl = e_node, e_lbl
-        self.a_node, self.a_lbl = a_node, a_lbl
-        self.b_node, self.b_lbl = b_node, b_lbl
+        e_lbl = Tex("End", font_size=26, color=DIM)
+        e_lbl.next_to(Circle(radius=NODE_R).move_to(END), RIGHT, buff=0.3)
+
+        a_node, a_lbl = self._node("A", A_POS, UP)
+        b_node, b_lbl = self._node("B", B_POS, DOWN)
+
+        # Cars follow the node slide via the x_shift tracker
+        x_delta = float(START[0] - _HOME[0])   # +0.3
 
         self.play(
+            self._s01_home_node.animate.move_to(START),
+            self._s01_dtown_node.animate.move_to(END),
+            self._x_shift.animate.set_value(x_delta),
+            ReplacementTransform(self._s01_home_lbl,  s_lbl),
+            ReplacementTransform(self._s01_dtown_lbl, e_lbl),
             LaggedStart(
-                AnimationGroup(FadeIn(s_node, scale=1.3), Write(s_lbl)),
-                AnimationGroup(FadeIn(e_node, scale=1.3), Write(e_lbl)),
                 AnimationGroup(FadeIn(a_node, scale=1.3), Write(a_lbl)),
                 AnimationGroup(FadeIn(b_node, scale=1.3), Write(b_lbl)),
-                lag_ratio=0.25,
+                lag_ratio=0.4,
             ),
             run_time=1.8,
         )
+
+        self.s_node = self._s01_home_node
+        self.s_lbl  = s_lbl
+        self.e_node = self._s01_dtown_node
+        self.e_lbl  = e_lbl
+        self.a_node, self.a_lbl = a_node, a_lbl
+        self.b_node, self.b_lbl = b_node, b_lbl
+
         self.wait(0.6)
-
-    def _phase_cars(self):
-        n = 180
-        offsets       = _RNG.uniform([-0.50, -0.28, 0], [0.50, 0.28, 0], (n, 3))
-        offsets[:, 2] = 0
-        freqs_x  = _RNG.uniform(0.20, 0.65, n)
-        freqs_y  = _RNG.uniform(0.20, 0.65, n)
-        phases_x = _RNG.uniform(0, TAU, n)
-        phases_y = _RNG.uniform(0, TAU, n)
-        amp = 0.022
-
-        self._timer = ValueTracker(0)
-        self._timer.add_updater(lambda m, dt: m.increment_value(dt))
-        self.add(self._timer)
-
-        self.cars = VGroup()
-        for i in range(n):
-            base  = (START + offsets[i]).copy()
-            color = CAR_PALETTE[i % len(CAR_PALETTE)]
-            dot   = Dot(base, radius=0.040, color=color, fill_opacity=0.82)
-
-            def make_updater(b, fx, fy, px, py):
-                def u(d):
-                    t = self._timer.get_value()
-                    d.move_to(b + np.array([
-                        amp * np.sin(TAU * fx * t + px),
-                        amp * np.sin(TAU * fy * t + py),
-                        0,
-                    ]))
-                return u
-
-            dot.add_updater(make_updater(base, freqs_x[i], freqs_y[i], phases_x[i], phases_y[i]))
-            self.cars.add(dot)
-
-        self.count_lbl = Text("4,000 drivers", font=FONT, font_size=22, color=DIM)
-        self.count_lbl.move_to(START + UP * 0.62)
-
-        self.play(
-            FadeIn(self.cars, lag_ratio=0.008),
-            FadeIn(self.count_lbl),
-            run_time=1.2,
-        )
-        self.wait(1.2)
 
     def _phase_roads(self):
         self.road_sa = self._road(START, A_POS)
@@ -256,8 +256,10 @@ class RoadNetwork(Scene):
         self.wait(2.0)
 
     def _phase_dynamic_labels(self):
-        self.lbl_sa = self._road_label("t = cars / 100", self.road_sa, np.array([-0.30,  0.55, 0]))
-        self.lbl_be = self._road_label("t = cars / 100", self.road_be, np.array([ 0.30, -0.55, 0]))
+        self.lbl_sa = self._road_label(
+            r"$t = \mathrm{cars}/100$", self.road_sa, np.array([-0.30,  0.55, 0]))
+        self.lbl_be = self._road_label(
+            r"$t = \mathrm{cars}/100$", self.road_be, np.array([ 0.30, -0.55, 0]))
 
         self.play(
             LaggedStart(FadeIn(self.lbl_sa), FadeIn(self.lbl_be), lag_ratio=0.4),
@@ -266,23 +268,20 @@ class RoadNetwork(Scene):
         self.wait(2.8)
 
     def _phase_closing(self):
-        # Stop jitter so the cars can be shifted cleanly
-        for dot in self.cars:
-            dot.clear_updaters()
-        self._timer.clear_updaters()
-
-        # Shift all network content up; A/B labels get an extra nudge left
+        # Network elements shift up directly; cars shift via _y_shift (jitter keeps running)
         content = VGroup(
             self.s_node, self.s_lbl, self.e_node, self.e_lbl,
             self.a_node, self.b_node,
             self.road_sa, self.road_ae, self.road_sb, self.road_be,
             self.lbl_ae, self.lbl_sb, self.lbl_sa, self.lbl_be,
-            self.cars, self.count_lbl,
         )
         self.play(
             content.animate.shift(UP * 0.5),
-            self.a_lbl.animate.shift(UP * 0.5 + LEFT * 0.25),
-            self.b_lbl.animate.shift(UP * 0.5 + LEFT * 0.25),
+            # A: further left + slightly down toward center axis
+            self.a_lbl.animate.shift(UP * 0.35 + LEFT * 0.35),
+            # B: further left + slightly up toward center axis
+            self.b_lbl.animate.shift(UP * 0.65 + LEFT * 0.35),
+            self._y_shift.animate.set_value(0.5),
             run_time=0.6,
         )
 
@@ -293,3 +292,12 @@ class RoadNetwork(Scene):
         q.to_edge(DOWN, buff=0.65)
         self.play(Write(q), run_time=1.2)
         self.wait(2.5)
+
+        # Idle with live jitter, then freeze and save for the next scene
+        self.wait(3.0)
+        for dot in self._s01_cars:
+            dot.clear_updaters()
+        self._timer.clear_updaters()
+        positions = np.array([dot.get_center() for dot in self._s01_cars])
+        os.makedirs("media", exist_ok=True)
+        np.save("media/s02_car_positions.npy", positions)
