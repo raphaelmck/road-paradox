@@ -19,6 +19,7 @@ B_POS = _S2_B     + _D
 NODE_R         = 0.22
 ROUTE_COLOR    = "#666666"
 SHORTCUT_COLOR = "#FFD700"
+OVERLOAD_COLOR = "#FF4444"
 
 CAR_PALETTE = [
     "#58C4DD", "#3DB8D0", "#72D4E8",
@@ -34,10 +35,10 @@ class CityAddsShortcut(Scene):
     def construct(self):
         self.add(self._grid())
         self._load_s03_state()
-        self._phase_transition()
-        self._phase_build_shortcut()
-        self._phase_voiceover()
-        self._phase_closing_text()
+        self._phase_shortcut()
+        self._phase_solo_driver()
+        self._phase_everyone()
+        self._phase_cleanup()
 
     # ── helpers ──────────────────────────────────────────────────────────────
 
@@ -64,36 +65,18 @@ class CityAddsShortcut(Scene):
         lbl.move_to(road.point_from_proportion(0.5) + perp_offset)
         return lbl
 
-    def _start_jitter(self, cars, bases, seed):
-        amp = 0.035
-        rng = np.random.default_rng(seed)
-        n   = len(cars)
-        fx  = rng.uniform(0.25, 0.70, max(n, 1))
-        fy  = rng.uniform(0.25, 0.70, max(n, 1))
-        px  = rng.uniform(0, TAU,  max(n, 1))
-        py  = rng.uniform(0, TAU,  max(n, 1))
-        for i, dot in enumerate(cars):
-            b = bases[i].copy()
-            def u(d, b=b, fx=fx[i], fy=fy[i], px=px[i], py=py[i]):
-                t = self._timer.get_value()
-                d.move_to(b + np.array([
-                    amp * np.sin(TAU * fx * t + px),
-                    amp * np.sin(TAU * fy * t + py),
-                    0,
-                ]))
-            dot.add_updater(u)
-
-    def _stop_jitter(self, cars):
-        for dot in cars:
-            dot.clear_updaters()
+    def _glow_line(self, road, color=WHITE, width=12, opacity=0.22):
+        return Line(
+            road.get_start(), road.get_end(),
+            stroke_width=width, stroke_color=color,
+        ).set_stroke(opacity=opacity)
 
     # ── s03 end-state reconstruction ─────────────────────────────────────────
+    # s03 _phase_closing: fades out cars, timer rows, closing text, ext formulas,
+    # and un-shifts lbl_sa/lbl_be back to their original s02 offsets.
+    # Result: clean graph only, no overlays.
 
     def _load_s03_state(self):
-        self._timer = ValueTracker(0)
-        self._timer.add_updater(lambda m, dt: m.increment_value(dt))
-        self.add(self._timer)
-
         def make_node(pos):
             outer = Circle(radius=NODE_R, stroke_width=2.5, stroke_color=WHITE, fill_opacity=0)
             outer.move_to(pos)
@@ -124,82 +107,29 @@ class CityAddsShortcut(Scene):
         self.road_sb = self._road(S_POS, B_POS)
         self.road_be = self._road(B_POS, E_POS)
 
-        self.lbl_ae = self._road_label("45 min", self.road_ae, np.array([ 0.30,  0.55, 0]))
-        self.lbl_sb = self._road_label("45 min", self.road_sb, np.array([-0.30, -0.55, 0]))
+        # Labels at original (un-pushed) offsets — matches s03 end state
+        self.lbl_ae = self._road_label("45 min",   self.road_ae, np.array([ 0.30,  0.55, 0]))
+        self.lbl_sb = self._road_label("45 min",   self.road_sb, np.array([-0.30, -0.55, 0]))
         self.lbl_sa = self._road_label(
-            r"$t = \mathrm{cars}/100$", self.road_sa, np.array([-0.65, 1.0, 0]))
+            r"$t = \mathrm{cars}/100$", self.road_sa, np.array([-0.30,  0.55, 0]))
         self.lbl_be = self._road_label(
-            r"$t = \mathrm{cars}/100$", self.road_be, np.array([ 0.65,-1.0, 0]))
-
-        ext_sa = Tex(r"$= 2000/100$", font_size=19, color=DIM)
-        ext_sa.next_to(self.lbl_sa, DOWN, buff=0.12)
-        ext_be = Tex(r"$= 2000/100$", font_size=19, color=DIM)
-        ext_be.next_to(self.lbl_be, DOWN, buff=0.12)
-
-        top_prefix = Tex("Top route:", font_size=20, color=DIM)
-        top_disp   = DecimalNumber(65, num_decimal_places=0, color=WHITE, font_size=34)
-        top_unit   = Tex("min", font_size=26, color=DIM)
-        self._top_row = VGroup(top_prefix, top_disp, top_unit).arrange(RIGHT, buff=0.14)
-        self._top_row.move_to(np.array([0.0, 1.5, 0]))
-
-        bot_prefix = Tex("Bottom route:", font_size=20, color=DIM)
-        bot_disp   = DecimalNumber(65, num_decimal_places=0, color=WHITE, font_size=34)
-        bot_unit   = Tex("min", font_size=26, color=DIM)
-        self._bot_row = VGroup(bot_prefix, bot_disp, bot_unit).arrange(RIGHT, buff=0.14)
-        self._bot_row.move_to(np.array([0.0, -0.3, 0]))
-
-        self._s03_closing = Tex(
-            r"Before shortcut: everyone takes \textbf{65 minutes}",
-            font_size=30, color=WHITE,
-        )
-        self._s03_closing.to_edge(DOWN, buff=0.65)
-
-        try:
-            bases = np.load("media/s03_car_positions.npy")
-        except FileNotFoundError:
-            bases = np.empty((0, 3))
-
-        self._cars = VGroup(*[
-            Dot(bases[i], radius=0.065,
-                color=CAR_PALETTE[i % len(CAR_PALETTE)], fill_opacity=0.88)
-            for i in range(len(bases))
-        ])
-
-        e_bases = [E_POS.copy() for _ in range(len(bases))]
-        self._start_jitter(list(self._cars), e_bases, seed=99)
+            r"$t = \mathrm{cars}/100$", self.road_be, np.array([ 0.30, -0.55, 0]))
 
         self.add(
             self.s_node, self.e_node, self.a_node, self.b_node,
             self.s_lbl, self.e_lbl, self.a_lbl, self.b_lbl,
             self.road_sa, self.road_ae, self.road_sb, self.road_be,
             self.lbl_ae, self.lbl_sb, self.lbl_sa, self.lbl_be,
-            ext_sa, ext_be,
-            self._top_row, self._bot_row,
-            self._s03_closing,
-            self._cars,
         )
-
-    def _phase_transition(self):
-        self.play(
-            FadeOut(self._s03_closing),
-            FadeOut(self._top_row),
-            FadeOut(self._bot_row),
-            run_time=0.8,
-        )
-        self.wait(0.3)
 
     # ── phases ───────────────────────────────────────────────────────────────
 
-    def _phase_build_shortcut(self):
-        vo = Tex("Now the city builds a new road.", font_size=30, color=WHITE)
+    def _phase_shortcut(self):
+        """Build the A→B shortcut with a brief caption."""
+        vo = Tex("The city adds a new road.", font_size=30, color=WHITE)
         vo.to_edge(DOWN, buff=0.65)
-        self.play(FadeIn(vo), run_time=0.6)
-        self.wait(1.2)
-
-        vo2 = Tex("A beautiful shortcut from A to B.", font_size=30, color=WHITE)
-        vo2.to_edge(DOWN, buff=0.65)
-        self.play(ReplacementTransform(vo, vo2), run_time=0.45)
-        self.wait(0.4)
+        self.play(FadeIn(vo), run_time=0.5)
+        self.wait(0.7)
 
         self.road_ab = Arrow(
             A_POS, B_POS,
@@ -215,7 +145,7 @@ class CityAddsShortcut(Scene):
             stroke_width=28, stroke_color=SHORTCUT_COLOR,
         ).set_stroke(opacity=0.10)
 
-        ab_glow_inner = Line(
+        self._ab_glow = Line(
             self.road_ab.get_start(), self.road_ab.get_end(),
             stroke_width=12, stroke_color=SHORTCUT_COLOR,
         ).set_stroke(opacity=0.22)
@@ -226,57 +156,118 @@ class CityAddsShortcut(Scene):
         self.lbl_ab = VGroup(lbl_zero, lbl_sc).arrange(DOWN, buff=0.06)
         self.lbl_ab.move_to(ab_mid + np.array([0.75, 0, 0]))
 
+        self.play(FadeIn(ab_glow_outer), GrowArrow(self.road_ab), run_time=1.3)
         self.play(
-            FadeIn(ab_glow_outer),
-            GrowArrow(self.road_ab),
-            run_time=1.4,
-        )
-        self.play(
-            FadeIn(ab_glow_inner),
+            FadeIn(self._ab_glow),
             ab_glow_outer.animate.set_stroke(opacity=0.04),
             FadeIn(self.lbl_ab),
+            run_time=0.6,
+        )
+        self.play(FadeOut(vo), run_time=0.5)
+        self.wait(0.5)
+
+    def _phase_solo_driver(self):
+        """One driver at Start rationally picks S → A → B → E.
+        Emphasis is purely on the cost labels: cars/100 beats fixed 45."""
+        solo = Dot(S_POS, radius=0.11, color=WHITE, fill_opacity=1.0)
+        self.play(FadeIn(solo, scale=1.6), run_time=0.5)
+        self.wait(0.5)
+
+        # ── Choice 1: cars/100 (SA) beats fixed 45 min (SB) ───────────────
+        self.play(
+            self.lbl_sa.animate.set_color(WHITE),
+            self.lbl_sb.animate.set_opacity(0.22),
+            run_time=0.5,
+        )
+        self.wait(2.0)
+
+        self.play(
+            self.lbl_sa.animate.set_color(DIM),
+            self.lbl_sb.animate.set_opacity(1.0),
+            solo.animate.move_to(A_POS),
+            run_time=1.2,
+        )
+        self.wait(0.5)
+
+        # ── Choice 2: 0 + cars/100 (A→B→E) beats fixed 45 min (AE) ───────
+        self.play(
+            self.lbl_be.animate.set_color(WHITE),
+            self.lbl_ae.animate.set_opacity(0.22),
+            run_time=0.5,
+        )
+        self.wait(2.0)
+
+        self.play(
+            self.lbl_be.animate.set_color(DIM),
+            self.lbl_ae.animate.set_opacity(1.0),
+            solo.animate.move_to(B_POS),
+            run_time=1.0,
+        )
+        self.play(solo.animate.move_to(E_POS), run_time=0.9)
+        self.wait(0.8)
+        self._solo = solo
+
+    def _phase_everyone(self):
+        """All drivers follow the same path — SA and BE turn red."""
+        rng = np.random.default_rng(55)
+        n = 40
+        offsets = rng.uniform(low=[-0.35, -0.25, 0], high=[0.35, 0.25, 0], size=(n, 3))
+        offsets[:, 2] = 0
+
+        cars = VGroup(*[
+            Dot(S_POS + offsets[i], radius=0.065,
+                color=CAR_PALETTE[i % len(CAR_PALETTE)], fill_opacity=0.88)
+            for i in range(n)
+        ])
+
+        self.play(
+            FadeOut(self._solo),
+            FadeIn(cars, lag_ratio=0.02),
             run_time=0.7,
         )
-        self.wait(0.9)
-        self._vo_current = vo2
+        self.wait(0.3)
 
-    def _phase_voiceover(self):
-        lines = [
-            r"And to make the effect as dramatic as possible,",
-            r"let's say this shortcut is basically instant.",
-            r"Zero minutes.",
-            r"Surely this can only help.",
-            r"After all, nobody is being forced to use it.",
-            r"It just gives drivers one more option.",
-            r"More options should make things better.",
-        ]
-        pauses = [1.6, 2.0, 2.2, 2.0, 2.2, 2.0, 2.5]
+        # All flow S→A — SA road turns red from overload
+        self.play(
+            LaggedStart(*[c.animate.move_to(A_POS) for c in cars], lag_ratio=0.04),
+            self.road_sa.animate.set_color(OVERLOAD_COLOR),
+            run_time=2.5,
+        )
+        self.wait(0.2)
 
-        cur = self._vo_current
-        for line, pause in zip(lines, pauses):
-            nxt = Tex(line, font_size=30, color=WHITE)
-            nxt.to_edge(DOWN, buff=0.65)
-            self.play(ReplacementTransform(cur, nxt), run_time=0.45)
-            self.wait(pause)
-            cur = nxt
-        self._vo_current = cur
+        # All flow A→B via shortcut — shortcut glows brighter
+        self.play(
+            LaggedStart(*[c.animate.move_to(B_POS) for c in cars], lag_ratio=0.04),
+            self._ab_glow.animate.set_stroke(opacity=0.45),
+            run_time=1.5,
+        )
+        self.wait(0.2)
 
-    def _phase_closing_text(self):
-        self.play(FadeOut(self._vo_current), run_time=0.5)
-        self.wait(0.4)
+        # All flow B→E — BE road turns red, both red roads glow
+        red_glow_sa = self._glow_line(self.road_sa, color=OVERLOAD_COLOR, width=18, opacity=0.25)
+        red_glow_be = self._glow_line(self.road_be, color=OVERLOAD_COLOR, width=18, opacity=0.25)
+        self.play(
+            LaggedStart(*[c.animate.move_to(E_POS) for c in cars], lag_ratio=0.04),
+            self.road_be.animate.set_color(OVERLOAD_COLOR),
+            FadeIn(red_glow_sa),
+            FadeIn(red_glow_be),
+            run_time=2.0,
+        )
+        self.wait(3.5)
 
-        txt1 = Tex(r"\textbf{A new option appears.}", font_size=42, color=WHITE)
-        txt1.to_edge(DOWN, buff=0.65)
-        self.play(Write(txt1), run_time=1.0)
-        self.wait(2.8)
+        self._red_glow_sa = red_glow_sa
+        self._red_glow_be = red_glow_be
+        self._crowd = cars
 
-        txt2 = Tex(r"\textbf{So what do drivers do?}", font_size=42, color=WHITE)
-        txt2.to_edge(DOWN, buff=0.65)
-        self.play(ReplacementTransform(txt1, txt2), run_time=0.8)
-        self.wait(3.0)
-
-        self._stop_jitter(list(self._cars))
-        self._timer.clear_updaters()
-        positions = np.array([dot.get_center() for dot in self._cars])
-        os.makedirs("media", exist_ok=True)
-        np.save("media/s04_car_positions.npy", positions)
+    def _phase_cleanup(self):
+        """Restore graph to clean state — no red roads, no glows, no cars."""
+        self.play(
+            FadeOut(self._red_glow_sa),
+            FadeOut(self._red_glow_be),
+            FadeOut(self._crowd),
+            self.road_sa.animate.set_color(ROUTE_COLOR),
+            self.road_be.animate.set_color(ROUTE_COLOR),
+            self._ab_glow.animate.set_stroke(opacity=0.22),
+            run_time=1.2,
+        )
+        self.wait(0.5)
