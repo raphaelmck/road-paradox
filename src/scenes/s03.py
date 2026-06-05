@@ -298,11 +298,17 @@ class BeforeShortcut(Scene):
         self._top_unit.clear_updaters()
         self._bot_unit.clear_updaters()
 
+        # Fade out formula extensions and un-push the t=cars/100 labels simultaneously
+        self.play(
+            FadeOut(self._ext_sa), FadeOut(self._ext_be),
+            self.lbl_sa.animate.shift(np.array([ 0.35, -0.45, 0])),
+            self.lbl_be.animate.shift(np.array([-0.35,  0.45, 0])),
+            run_time=0.8,
+        )
+
+        # Fade out dots, counters, and closing text — keep graph + edge labels
         self.play(
             FadeOut(self._cars),
-            FadeOut(self.lbl_ae), FadeOut(self.lbl_sb),
-            FadeOut(self.lbl_sa), FadeOut(self.lbl_be),
-            FadeOut(self._ext_sa), FadeOut(self._ext_be),
             FadeOut(self._top_row), FadeOut(self._bot_row),
             FadeOut(self._q),
             run_time=1.2,
