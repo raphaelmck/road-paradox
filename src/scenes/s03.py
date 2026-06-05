@@ -34,6 +34,7 @@ class BeforeShortcut(Scene):
         self.add(self._grid())
         self._load_s02_state()
         self._phase_transition()
+        self._phase_push_labels()
         self._phase_setup_timers()
         self._phase_reveal_formula()
         self._phase_first_legs()
@@ -131,14 +132,14 @@ class BeforeShortcut(Scene):
         self.road_sb = self._road(S_POS, B_POS)
         self.road_be = self._road(B_POS, E_POS)
 
-        # Fixed-time roads stay at normal offset
+        # Fixed-time roads at normal offset
         self.lbl_ae = self._road_label("45 min", self.road_ae, np.array([ 0.30,  0.55, 0]))
         self.lbl_sb = self._road_label("45 min", self.road_sb, np.array([-0.30, -0.55, 0]))
-        # Traffic-dependent roads pushed further from the edge
+        # Traffic-dependent labels at s02 end positions — pushed outward in _phase_push_labels
         self.lbl_sa = self._road_label(
-            r"$t = \mathrm{cars}/100$", self.road_sa, np.array([-0.65, 1.0, 0]))
+            r"$t = \mathrm{cars}/100$", self.road_sa, np.array([-0.30,  0.55, 0]))
         self.lbl_be = self._road_label(
-            r"$t = \mathrm{cars}/100$", self.road_be, np.array([ 0.65,-1.0, 0]))
+            r"$t = \mathrm{cars}/100$", self.road_be, np.array([ 0.30, -0.55, 0]))
 
         self._s02_closing = Tex(
             "Each person wants to get there as fast as possible.",
@@ -173,43 +174,55 @@ class BeforeShortcut(Scene):
         self.play(FadeOut(self._s02_closing), run_time=0.8)
         self.wait(0.3)
 
+    def _phase_push_labels(self):
+        """Animate formula labels away from the road edges."""
+        # delta from s02 offset [-0.30, 0.55] → target [-0.65, 1.0]
+        self.play(
+            self.lbl_sa.animate.shift(np.array([-0.35,  0.45, 0])),
+            self.lbl_be.animate.shift(np.array([ 0.35, -0.45, 0])),
+            run_time=0.7,
+        )
+        self.wait(0.3)
+
     # ── phases ───────────────────────────────────────────────────────────────
 
     def _phase_setup_timers(self):
         self._top_val = ValueTracker(0)
         self._bot_val = ValueTracker(0)
 
-        # Top counter
+        # Top counter — unit tracks DecimalNumber so no overlap as digits grow
         top_prefix = Tex("Top route:", font_size=20, color=DIM)
         self._top_disp = DecimalNumber(0, num_decimal_places=0, color=WHITE, font_size=34)
-        top_unit = Tex("min", font_size=26, color=DIM)
-        top_row = VGroup(top_prefix, self._top_disp, top_unit).arrange(RIGHT, buff=0.14)
+        self._top_unit = Tex("min", font_size=26, color=DIM)
+        top_row = VGroup(top_prefix, self._top_disp, self._top_unit).arrange(RIGHT, buff=0.18)
         top_row.move_to(np.array([0.0, 1.5, 0]))
         self._top_disp.add_updater(lambda m: m.set_value(self._top_val.get_value()))
+        self._top_unit.add_updater(lambda m: m.next_to(self._top_disp, RIGHT, buff=0.18))
 
         # Bottom counter
         bot_prefix = Tex("Bottom route:", font_size=20, color=DIM)
         self._bot_disp = DecimalNumber(0, num_decimal_places=0, color=WHITE, font_size=34)
-        bot_unit = Tex("min", font_size=26, color=DIM)
-        bot_row = VGroup(bot_prefix, self._bot_disp, bot_unit).arrange(RIGHT, buff=0.14)
+        self._bot_unit = Tex("min", font_size=26, color=DIM)
+        bot_row = VGroup(bot_prefix, self._bot_disp, self._bot_unit).arrange(RIGHT, buff=0.18)
         bot_row.move_to(np.array([0.0, -0.3, 0]))
         self._bot_disp.add_updater(lambda m: m.set_value(self._bot_val.get_value()))
+        self._bot_unit.add_updater(lambda m: m.next_to(self._bot_disp, RIGHT, buff=0.18))
 
-        self.play(
-            FadeIn(top_row), FadeIn(bot_row),
-            run_time=0.6,
-        )
+        self._top_row = top_row
+        self._bot_row = bot_row
+
+        self.play(FadeIn(top_row), FadeIn(bot_row), run_time=0.6)
 
     def _phase_reveal_formula(self):
-        """Morph in '= 2000/100' next to each traffic label before cars move."""
-        ext_sa = Tex(r"$= 2000/100$", font_size=19, color=DIM)
-        ext_sa.next_to(self.lbl_sa, DOWN, buff=0.12)
+        """Write '= 2000/100' next to each traffic label before cars move."""
+        self._ext_sa = Tex(r"$= 2000/100$", font_size=19, color=DIM)
+        self._ext_sa.next_to(self.lbl_sa, DOWN, buff=0.12)
 
-        ext_be = Tex(r"$= 2000/100$", font_size=19, color=DIM)
-        ext_be.next_to(self.lbl_be, DOWN, buff=0.12)
+        self._ext_be = Tex(r"$= 2000/100$", font_size=19, color=DIM)
+        self._ext_be.next_to(self.lbl_be, DOWN, buff=0.12)
 
         self.play(
-            LaggedStart(Write(ext_sa), Write(ext_be), lag_ratio=0.3),
+            LaggedStart(Write(self._ext_sa), Write(self._ext_be), lag_ratio=0.3),
             run_time=1.0,
         )
         self.wait(0.6)
@@ -269,16 +282,33 @@ class BeforeShortcut(Scene):
         self.wait(1.5)
 
     def _phase_closing(self):
-        q = Tex(
+        self._q = Tex(
             r"Before shortcut: everyone takes \textbf{65 minutes}",
             font_size=30, color=WHITE,
         )
-        q.to_edge(DOWN, buff=0.65)
-        self.play(Write(q), run_time=1.2)
+        self._q.to_edge(DOWN, buff=0.65)
+        self.play(Write(self._q), run_time=1.2)
         self.wait(3.0)
 
+        # Clear all updaters before fade-out
         self._stop_jitter(list(self._cars))
         self._timer.clear_updaters()
+        self._top_disp.clear_updaters()
+        self._bot_disp.clear_updaters()
+        self._top_unit.clear_updaters()
+        self._bot_unit.clear_updaters()
+
+        self.play(
+            FadeOut(self._cars),
+            FadeOut(self.lbl_ae), FadeOut(self.lbl_sb),
+            FadeOut(self.lbl_sa), FadeOut(self.lbl_be),
+            FadeOut(self._ext_sa), FadeOut(self._ext_be),
+            FadeOut(self._top_row), FadeOut(self._bot_row),
+            FadeOut(self._q),
+            run_time=1.2,
+        )
+        self.wait(0.5)
+
         positions = np.array([dot.get_center() for dot in self._cars])
         os.makedirs("media", exist_ok=True)
         np.save("media/s03_car_positions.npy", positions)
